@@ -14,6 +14,7 @@ from astropy import constants as c
 from astropy import units as u
 from astropy.table import Table
 from astropy.wcs import WCS
+from astropy.modeling import blackbody_lambda
 
 from gunagala.optic import Optic
 from gunagala.optical_filter import Filter
@@ -57,6 +58,7 @@ def create_imagers(config=None):
     filters = dict()
     psfs = dict()
     skys = dict()
+    warm_scope_components = dict()
     imagers = dict()
 
     # Setup imagers
@@ -116,6 +118,8 @@ def create_imagers(config=None):
             sky_info = config['skys'][sky_name]
             assert issubclass(globals()[sky_info['model']], Sky)
             sky = globals()[sky_info['model']](**sky_info)
+
+
 
         imagers[name] = Imager(optic,
                                camera,
@@ -1554,6 +1558,26 @@ class Imager:
             self.mean_wave[name] = i1 / i0
             self.pivot_wave[name] = (i1 / self._iminus1[name])**0.5
             self.bandwidth[name] = i0 / effs.max()
+
+    def _telescope_emission(list_of_warm_components):
+        """Calculate
+        Assumes all thermal sources are upstream from the filters.
+        """
+
+        for temp, emissivitty, solid_angle in list_of_warm_components:
+
+            bb_fluxes = blackbody_lambda(self.wavelengths, temp)
+
+            total_bb_flux = emissivitty * bb_fluxes * solid_angle * (self.camera.pixel_size)**2 * u.pixel
+
+            total_bb_flux = total_bb_flux.to(u.photons / u.second / u.AA / u.pixel, equivalcinces=u.spectral_density(self.wavelengths))
+
+            self.scope_emissions = {}
+            for filter_name in self.filter_names:
+                self.scope_emissions[filter_name] = np.trapz(self.filters[filter_name].transmission * self.camera.qe * total_bb_flux, x=self.wavelengths)
+
+                assert self.scope_emissions[filter_name].unit == u.electron / u.second / u.pixel
+
 
     def _gamma0(self):
         """
